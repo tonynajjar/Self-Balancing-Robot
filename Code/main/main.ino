@@ -1,12 +1,20 @@
 #include <Wire.h>
-#include "Kalman.h" 
+#include "Kalman.h"
 #include <PID_v1.h>
 #include <LMotorController.h>
 #define RESTRICT_PITCH // Comment out to restrict roll to ±90deg instead
+#define enc1_outA 3
+#define enc1_outB 11
+#define enc2_outA 5
+#define enc2_outB 6
 Kalman kalmanX; // Create the Kalman instances
 Kalman kalmanY;
 
-#define MIN_ABS_SPEED 60
+int pos = 0;
+int aState;
+int aLastState;
+
+#define MIN_ABS_SPEED 70
 /* IMU Data */
 double accX, accY, accZ;
 double gyroX, gyroY, gyroZ;
@@ -26,12 +34,14 @@ double originalSetpoint = 0;
 double setpoint = originalSetpoint;
 double movingAngleOffset = 0.1;
 double input, output;
+double realOutput = MIN_ABS_SPEED + 1;
 int moveState = 0; //0 = balance; 1 = back; 2 = forth
 double Kp = 15;
 double Kd = 0;
 double Ki = 0.1;
 
-PID pid(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
+PID innerPID(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
+
 
 double motorSpeedFactorLeft = 1;
 double motorSpeedFactorRight = 1;
@@ -48,8 +58,13 @@ LMotorController motorController(ENA, IN1, IN2, ENB, IN3, IN4, motorSpeedFactorL
 void setup() {
   Serial.begin(115200);
   Wire.begin();
-  pid.SetTunings(Kp, Kd, Ki);
-  pinMode(13,OUTPUT);
+  innerPID.SetTunings(Kp, Kd, Ki);
+  pinMode(13, OUTPUT);
+  pinMode(enc1_outA, INPUT);
+  pinMode(enc1_outB, INPUT);
+  pinMode(enc2_outA, INPUT);
+  pinMode(enc2_outB, INPUT);
+  aLastState = digitalRead(outputA);
   TWBR = ((F_CPU / 400000L) - 16) / 2; // Set I2C frequency to 400kHz
 
   i2cData[0] = 7; // Set the sample rate to 1000Hz - 8kHz/(7+1) = 1000Hz
@@ -93,9 +108,9 @@ void setup() {
 
   timer = micros();
 
-    pid.SetMode(AUTOMATIC);
-    pid.SetSampleTime(10);
-    pid.SetOutputLimits(-255, 255);
+  innerPID.SetMode(AUTOMATIC);
+  innerPID.SetSampleTime(10);
+  innerPID.SetOutputLimits(-255, 255);
 }
 
 void loop() {
@@ -138,7 +153,7 @@ void loop() {
   if (abs(kalAngleX) > 90)
     gyroYrate = -gyroYrate; // Invert rate, so it fits the restriced accelerometer reading
   kalAngleY = kalmanY.getAngle(pitch, gyroYrate, dt);
-  
+
 #else
   // This fixes the transition problem when the accelerometer angle jumps between -180 and 180 degrees
   if ((pitch < -90 && kalAngleY > 90) || (pitch > 90 && kalAngleY < -90)) {
@@ -195,47 +210,60 @@ void loop() {
   Serial.print(kalAngleY); Serial.print("\t");
 #endif
 
-  if(Serial.available()){
-      counter= millis();
-      char c= Serial.read();
-      
-      Serial.println(c);
-      
-      switch(c){
-        
-        case 'w':
-          setpoint=-3;
-          break;
+  if (Serial.available()) {
+    counter = millis();
+    char c = Serial.read();
 
-         case 's':
-         setpoint=-13;
-         break;
+    Serial.println(c);
 
-         case 'a':
-         digitalWrite(13,HIGH);
-         break;
+    switch (c) {
 
-         case 'd':
-         digitalWrite(13,HIGH);
-         break;
-      }
+      case 'w':
+        setpoint = -3;
+        break;
+
+      case 's':
+        setpoint = -13;
+        break;
+
+      case 'a':
+        digitalWrite(13, HIGH);
+        break;
+
+      case 'd':
+        digitalWrite(13, HIGH);
+        break;
+    }
   }
   else {
-    if(millis()-counter > 500){
-      digitalWrite(13,LOW);
-      setpoint= originalSetpoint;
+    if (millis() - counter > 500) {
+      digitalWrite(13, LOW);
+      setpoint = originalSetpoint;
     }
-    
+
   }
 
 
-  input= kalAngleY;
-   if(input> 0.5 || input <-0.5){
+  aState = digitalRead(outputA); // Reads the "current" state of the outputA
+  // If the previous and the current state of the outputA are different, that means a Pulse has occured
+  if (aState != aLastState) {
+    // If the outputB state is different to the outputA state, that means the encoder is rotating clockwise
+    if (digitalRead(outputB) != aState) {
+      pos ++;
+    } else {
+      pos --;
+    }
+  }
+  aLastState = aState; // Updates the previous state of the outputA with the current state
+
+
+
+  input = kalAngleY;
   Kp = map(analogRead(A0), 0, 1023, 0, 30);
-  Kd = double(analogRead(A2))/1023.0*20.0;
-  Ki = double(analogRead(A1))/1000.0;
-  pid.SetTunings(Kp, Kd, Ki);
-  pid.Compute();
+  Kd = double(analogRead(A2)) / 1023.0 * 20.0;
+  Ki = double(analogRead(A1)) / 1000.0;
+  innerPID.SetTunings(Kp, Kd, Ki);
+  innerPID.Compute();
   Serial.print("Kp= ");
   Serial.print(Kp);
   Serial.print("; ");
@@ -247,20 +275,34 @@ void loop() {
   Serial.print("; ");
   Serial.print(input);
   Serial.print(": ");
-  Serial.print(output);
+  Serial.print("Position: ");
+  Serial.print(pos);
   Serial.print(": ");
-
   /*
-  if(abs(output)>MIN_ABS_SPEED)
+    if(abs(output)>MIN_ABS_SPEED)
     Serial.println(output);
     else if(output>0)
     Serial.println(MIN_ABS_SPEED);
     else
     Serial.println(-MIN_ABS_SPEED);
-    */
- 
-    Serial.println(motorController.move(output, MIN_ABS_SPEED));
-   }
-  
+  */
+  realOutput = motorController.getSpeed(output, MIN_ABS_SPEED);
+
+  if (input > 0.3 || input < -0.3) {
+
+    //if(realOutput> MIN_ABS_SPEED || realOutput< -MIN_ABS_SPEED){
+    motorController.move(realOutput);
+    Serial.println(realOutput);
+    //}
+    //else
+    //Serial.println();
+
+  }
+  else {
+    motorController.move(40 * realOutput / abs(realOutput));
+    Serial.println();
+  }
+
+
 
 }

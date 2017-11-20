@@ -1,18 +1,14 @@
 #include <Wire.h>
+#include <Encoder.h>
 #include "Kalman.h"
 #include <PID_v1.h>
 #include <LMotorController.h>
 #define RESTRICT_PITCH // Comment out to restrict roll to ±90deg instead
-#define enc1_outA 3
-#define enc1_outB 11
-#define enc2_outA 5
-#define enc2_outB 6
 Kalman kalmanX; // Create the Kalman instances
 Kalman kalmanY;
-
-int pos = 0;
-int aState;
-int aLastState;
+Encoder myEnc(3, 11);
+long oldPosition  = -999;
+long newPosition;
 
 #define MIN_ABS_SPEED 70
 /* IMU Data */
@@ -60,11 +56,6 @@ void setup() {
   Wire.begin();
   innerPID.SetTunings(Kp, Kd, Ki);
   pinMode(13, OUTPUT);
-  pinMode(enc1_outA, INPUT);
-  pinMode(enc1_outB, INPUT);
-  pinMode(enc2_outA, INPUT);
-  pinMode(enc2_outB, INPUT);
-  aLastState = digitalRead(outputA);
   TWBR = ((F_CPU / 400000L) - 16) / 2; // Set I2C frequency to 400kHz
 
   i2cData[0] = 7; // Set the sample rate to 1000Hz - 8kHz/(7+1) = 1000Hz
@@ -114,6 +105,13 @@ void setup() {
 }
 
 void loop() {
+
+  newPosition = myEnc.read();
+  if (newPosition != oldPosition) {
+    oldPosition = newPosition;
+    //Serial.println(newPosition);  
+  }
+  
   /* Update all the values */
   while (i2cRead(0x3B, i2cData, 14));
   accX = ((i2cData[0] << 8) | i2cData[1]);
@@ -183,7 +181,7 @@ void loop() {
   if (gyroYangle < -180 || gyroYangle > 180)
     gyroYangle = kalAngleY;
 
-  /* Print Data */
+  /* Print Data 
 #if 0 // Set to 1 to activate
   Serial.print(accX); Serial.print("\t");
   Serial.print(accY); Serial.print("\t");
@@ -209,7 +207,9 @@ void loop() {
   Serial.print(compAngleY); Serial.print("\t");
   Serial.print(kalAngleY); Serial.print("\t");
 #endif
+*/
 
+/*
   if (Serial.available()) {
     counter = millis();
     char c = Serial.read();
@@ -242,22 +242,10 @@ void loop() {
     }
 
   }
+  */
 
 
-  aState = digitalRead(outputA); // Reads the "current" state of the outputA
-  // If the previous and the current state of the outputA are different, that means a Pulse has occured
-  if (aState != aLastState) {
-    // If the outputB state is different to the outputA state, that means the encoder is rotating clockwise
-    if (digitalRead(outputB) != aState) {
-      pos ++;
-    } else {
-      pos --;
-    }
-  }
-  aLastState = aState; // Updates the previous state of the outputA with the current state
-
-
-
+  
   input = kalAngleY;
   Kp = map(analogRead(A0), 0, 1023, 0, 30);
   Kd = double(analogRead(A2)) / 1023.0 * 20.0;
@@ -276,7 +264,7 @@ void loop() {
   Serial.print(input);
   Serial.print(": ");
   Serial.print("Position: ");
-  Serial.print(pos);
+  Serial.print(newPosition);
   Serial.print(": ");
   /*
     if(abs(output)>MIN_ABS_SPEED)

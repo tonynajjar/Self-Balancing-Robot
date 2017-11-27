@@ -19,6 +19,5 @@ C=eye(4);
 D=[0;0;0;0];
 
 
-C = pid(10,1)
-G = ss(A,B,C,D);
-closedLoop = feedback(G*C,1);
+G = ss(A,B,C,D)
+[num den]= ss2tf(A,B,C,D)

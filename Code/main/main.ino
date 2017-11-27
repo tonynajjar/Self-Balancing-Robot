@@ -6,9 +6,9 @@
 #define RESTRICT_PITCH // Comment out to restrict roll to ±90deg instead
 Kalman kalmanX; // Create the Kalman instances
 Kalman kalmanY;
-Encoder myEnc(3, 11);
+Encoder left(5, 6);
+Encoder right(3, 11);
 long oldPosition  = -999;
-long newPosition;
 
 #define MIN_ABS_SPEED 70
 /* IMU Data */
@@ -26,21 +26,32 @@ unsigned long counter;
 // TODO: Make calibration routine
 
 //PID
-double originalSetpoint = 0;
-double setpoint = originalSetpoint;
-double movingAngleOffset = 0.1;
-double input, output;
-double realOutput = MIN_ABS_SPEED + 1;
-int moveState = 0; //0 = balance; 1 = back; 2 = forth
-double Kp = 15;
-double Kd = 0;
-double Ki = 0.1;
 
-PID innerPID(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
+const int AVERAGE_COUNT = 20;
+float speed_values[AVERAGE_COUNT];
+int filter_pos = 0;
+
+double angleSetpoint = 0;
+double angleInput, angleOutput;
+double speedSetpoint = 0;
+double speedInput, speedOutput;
+int moveState = 0; //0 = balance; 1 = back; 2 = forth
+
+double angleKp = 17.5;
+double angleKd = 5;
+double angleKi = 0.5;
+
+double speedKp = 0.5;
+double speedKd = 0;
+double speedKi = 0;
+
+PID anglePID(&angleInput, &angleOutput, &angleSetpoint, angleKp, angleKi, angleKd, DIRECT);
+PID speedPID(&speedInput, &speedOutput, &speedSetpoint, speedKp, speedKi, speedKd, DIRECT);
 
 
 double motorSpeedFactorLeft = 1;
 double motorSpeedFactorRight = 1;
+double realOutput = MIN_ABS_SPEED + 1;
 //MOTOR CONTROLLER
 const int ENA = 10;
 const int IN1 = 7;
@@ -54,7 +65,8 @@ LMotorController motorController(ENA, IN1, IN2, ENB, IN3, IN4, motorSpeedFactorL
 void setup() {
   Serial.begin(115200);
   Wire.begin();
-  innerPID.SetTunings(Kp, Kd, Ki);
+  anglePID.SetTunings(angleKp, angleKd, angleKi);
+  
   pinMode(13, OUTPUT);
   TWBR = ((F_CPU / 400000L) - 16) / 2; // Set I2C frequency to 400kHz
 
@@ -99,18 +111,40 @@ void setup() {
 
   timer = micros();
 
-  innerPID.SetMode(AUTOMATIC);
-  innerPID.SetSampleTime(10);
-  innerPID.SetOutputLimits(-255, 255);
+  anglePID.SetMode(AUTOMATIC);
+  anglePID.SetSampleTime(10);
+  anglePID.SetOutputLimits(-255, 255);
+  speedPID.SetMode(AUTOMATIC);
+  speedPID.SetSampleTime(10);
+  speedPID.SetOutputLimits(-5, 5);
 }
+
+
+long r_wheel, r_wheel_velocity, r_last_wheel;
+long l_wheel, l_wheel_velocity, l_last_wheel;
 
 void loop() {
 
-  newPosition = myEnc.read();
-  if (newPosition != oldPosition) {
-    oldPosition = newPosition;
-    //Serial.println(newPosition);  
+  
+  // calculate speed
+  l_wheel = left.read();
+  r_wheel = right.read();
+
+  l_wheel_velocity = l_wheel - l_last_wheel;
+  l_last_wheel = l_wheel;
+  r_wheel_velocity = r_wheel - r_last_wheel;
+  r_last_wheel = r_wheel;
+
+  int speed = ((l_wheel_velocity + r_wheel_velocity));
+
+  // let's make an average speed for the last N smaples
+  int out = 0;
+  speed_values[filter_pos] = speed;
+  filter_pos = (filter_pos + 1) % AVERAGE_COUNT;
+  for (int i = 0; i < AVERAGE_COUNT; i++) {
+    out += speed_values[i];
   }
+  speedInput = (out / AVERAGE_COUNT);
   
   /* Update all the values */
   while (i2cRead(0x3B, i2cData, 14));
@@ -219,11 +253,11 @@ void loop() {
     switch (c) {
 
       case 'w':
-        setpoint = -3;
+        angleSetpoint = -3;
         break;
 
       case 's':
-        setpoint = -13;
+        angleSetpoint = -13;
         break;
 
       case 'a':
@@ -238,59 +272,71 @@ void loop() {
   else {
     if (millis() - counter > 500) {
       digitalWrite(13, LOW);
-      setpoint = originalSetpoint;
+      angleSetpoint = originalSetpoint;
     }
 
   }
   */
-
-
   
-  input = kalAngleY;
-  Kp = map(analogRead(A0), 0, 1023, 0, 30);
-  Kd = double(analogRead(A2)) / 1023.0 * 20.0;
-  Ki = double(analogRead(A1)) / 1000.0;
-  innerPID.SetTunings(Kp, Kd, Ki);
-  innerPID.Compute();
-  Serial.print("Kp= ");
-  Serial.print(Kp);
+  speedPID.SetTunings(speedKp, speedKd, speedKi);
+  speedPID.Compute();
+  
+  angleInput = kalAngleY;
+  angleSetpoint= speedOutput;
+  
+  angleKp = map(analogRead(A0), 0, 1023, 0, 30);
+  angleKd = double(analogRead(A2)) / 1023.0 * 20.0;
+  angleKi = double(analogRead(A1)) / 1000.0;
+  anglePID.SetTunings(angleKp, angleKd, angleKi);
+  
+  anglePID.Compute();
+  
+  Serial.print("angleKp= ");
+  Serial.print(angleKp);
   Serial.print("; ");
-  Serial.print("Ki= ");
-  Serial.print(Ki);
+  Serial.print("angleKi= ");
+  Serial.print(angleKi);
   Serial.print("; ");
-  Serial.print("Kd= ");
-  Serial.print(Kd);
+  Serial.print("angleKd= ");
+  Serial.print(angleKd);
   Serial.print("; ");
-  Serial.print(input);
+  Serial.print("speedInput= ");
+  Serial.print(speedInput);
   Serial.print(": ");
-  Serial.print("Position: ");
-  Serial.print(newPosition);
+  Serial.print("speedOutput= ");
+  Serial.print(speedOutput);
   Serial.print(": ");
+  Serial.print("angleInput= ");
+  Serial.print(angleInput);
+  Serial.print(": ");
+  Serial.print("angleOutput= ");
+  Serial.print(angleOutput);
+  Serial.print(": ");
+
   /*
-    if(abs(output)>MIN_ABS_SPEED)
-    Serial.println(output);
-    else if(output>0)
+    if(abs(angleOuput)>MIN_ABS_SPEED)
+    Serial.println(angleOuput);
+    else if(angleOuput>0)
     Serial.println(MIN_ABS_SPEED);
     else
     Serial.println(-MIN_ABS_SPEED);
   */
-  realOutput = motorController.getSpeed(output, MIN_ABS_SPEED);
+  //realOutput = motorController.getSpeed(angleOutput, MIN_ABS_SPEED);
 
-  if (input > 0.3 || input < -0.3) {
+  if (angleInput > angleSetpoint+0.5 || angleInput < angleSetpoint-0.5) {
 
     //if(realOutput> MIN_ABS_SPEED || realOutput< -MIN_ABS_SPEED){
-    motorController.move(realOutput);
-    Serial.println(realOutput);
+    
+    Serial.println(motorController.move(angleOutput,  MIN_ABS_SPEED));
     //}
     //else
     //Serial.println();
 
   }
-  else {
-    motorController.move(40 * realOutput / abs(realOutput));
-    Serial.println();
+  else if(angleInput>angleSetpoint) {
+    Serial.println(motorController.move(-30));
   }
-
-
-
+  else
+  Serial.println(motorController.move(30));
+  
 }

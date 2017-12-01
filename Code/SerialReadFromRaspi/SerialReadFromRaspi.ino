@@ -1,39 +1,25 @@
+#include <SoftwareSerial.h>
+
+SoftwareSerial mySerial(13, 1);
+//SoftwareSerial mySerial1(0, 1);
 unsigned long timer;
 void setup() {
   // put your setup code here, to run once:
-Serial.begin(115200);
-pinMode(13,OUTPUT);
+mySerial.begin(115200);
+//Serial.begin(9600);
+//mySerial.listen();
 }
 
 void loop() {
-  if(Serial.available()){
+  if(mySerial.available()){
       timer= millis();
-      char c= Serial.read();
+      char c= mySerial.read();
       
-      Serial.println(c);
+      mySerial.println(c);
       
-      switch(c){
-        
-        case 'w':
-          digitalWrite(13,HIGH);
-          break;
-
-         case 's':
-         digitalWrite(13,HIGH);
-         break;
-
-         case 'a':
-         digitalWrite(13,HIGH);
-         break;
-
-         case 'd':
-         digitalWrite(13,HIGH);
-         break;
-      }
   }
   else {
     if(millis()-timer > 500){
-      digitalWrite(13,LOW);
     }
     
   }

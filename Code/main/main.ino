@@ -10,18 +10,16 @@
 #include "Wire.h"
 #endif
 
-
-#define LOG_INPUT 0
 #define MOVE_BACK_FORTH 0
 
-#define MIN_ABS_SPEED 30
+#define MIN_ABS_SPEED 80
 
 //SoftwareSerial mySerial(13, 66);
 
 Encoder left(9, 6);
 Encoder right(10, 11);
 long oldPosition  = -999;
-
+int encCount = 0;
 //MPU
 unsigned long counter;
 MPU6050 mpu;
@@ -44,19 +42,19 @@ float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gra
 
 double originalSetpoint = 174.29;
 double setpoint = originalSetpoint;
-double movingAngleOffset = 2.3;
-double input, output;
+double movingAngleOffset = 1.5;
+double input = originalSetpoint, output;
 int moveState = 0; //0 = balance; 1 = back; 2 = forth
 
+double posInput, posOutput, posSetpoint = 0;
 
-PID pid(&input, &output, &setpoint, 25, 240, 2.5, DIRECT);
-
-
+PID pid(&input, &output, &setpoint, 25, 240, 2, DIRECT);
+PID posPID(&posInput, &posOutput, &posSetpoint, 0.8, 0, 1, REVERSE);
 
 //MOTOR CONTROLLER
 
 int motorSpeed;
-double motorSpeedFactorLeft = 0.78;
+double motorSpeedFactorLeft = 0.8;
 double motorSpeedFactorRight = 1;
 //MOTOR CONTROLLER
 const int ENA = 3;
@@ -66,7 +64,6 @@ const int IN3 = 8;
 const int IN4 = 12;
 const int ENB = 5;
 LMotorController motorController(ENA, IN1, IN2, ENB, IN3, IN4, motorSpeedFactorLeft, motorSpeedFactorRight);
-
 
 
 //timers
@@ -93,7 +90,7 @@ void setup()
 
 
   Serial.begin(115200);
-  
+
   while (!Serial); // wait for Leonardo enumeration, others continue immediately
 
   // initialize device
@@ -138,6 +135,10 @@ void setup()
     pid.SetMode(AUTOMATIC);
     pid.SetSampleTime(10);
     pid.SetOutputLimits(-255, 255);
+
+    posPID.SetMode(AUTOMATIC);
+    posPID.SetSampleTime(10);
+    posPID.SetOutputLimits(-movingAngleOffset, movingAngleOffset);
   }
   else
   {
@@ -154,13 +155,38 @@ void setup()
 
 void loop()
 {
+
+
   // if programming failed, don't try to do anything
-  if (!dmpReady) return;
+  if (!dmpReady) {
+    return;
+  }
 
   // wait for MPU interrupt or extra packet(s) available
   while (!mpuInterrupt && fifoCount < packetSize)
   {
+
+    //Serial.println(abs(input - originalSetpoint));
+    if (abs(input - originalSetpoint) > 20) {
+      motorController.move(0);
+      break;
+    }
+
+    double newPosition = (right.read() + left.read()) / 2;
+    if (newPosition != oldPosition && abs(newPosition - oldPosition) > 5) {
+      oldPosition = newPosition;
+      posInput = newPosition / 100;
+      //Serial.println(posInput);
+
+    }
+
+
+
+    // Serial.println(posInput);
     //no mpu data - performing PID calculations and output to motors
+    posPID.Compute();
+
+    calculateSetpoint();
 
     pid.Compute();
 
@@ -170,24 +196,31 @@ void loop()
     else {
       motorController.move(0);
     }
-    /*
-      Serial.print(input);
-      Serial.print("\t");
-      Serial.print(output);
-      Serial.print("\t");
-      Serial.println(setpoint);
-    */
-    unsigned long currentMillis = millis();
 
-    loopAt5Hz();
     /*
-    if (currentMillis - time5Hz >= 1000)
+        Serial.print(posInput);
+        Serial.print("\t");
+        Serial.println(setpoint);
+
+           Serial.print("\t");
+           Serial.print(input);
+           Serial.print("\t");
+           Serial.println(posInput);
+           Serial.print(posOutput);
+           Serial.print("\t");
+           Serial.print(setpoint);
+           Serial.print("\t");
+    */
+
+
+    unsigned long currentMillis = millis();
+    if (currentMillis - time5Hz >= 5000)
     {
-      loopAt5Hz();
+      //moveBackForth();
       time5Hz = currentMillis;
     }
-    */
-    
+
+
   }
 
   // reset interrupt flag and get INT_STATUS byte
@@ -221,70 +254,72 @@ void loop()
     mpu.dmpGetQuaternion(&q, fifoBuffer);
     mpu.dmpGetGravity(&gravity, &q);
     mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-#if LOG_INPUT
-    Serial.print("ypr\t");
-    Serial.print(ypr[0] * 180 / M_PI);
-    Serial.print("\t");
-    Serial.print(ypr[1] * 180 / M_PI);
-    Serial.print("\t");
-    Serial.println(ypr[2] * 180 / M_PI);
-#endif
+
     input = ypr[1] * 180 / M_PI + 180;
 
+    /*
+
+    */
   }
 }
 
-void loopAt5Hz() {
+void calculateSetpoint() {
 
   if (Serial.available()) {
     counter = millis();
     char c = Serial.read();
 
-    Serial.println(c);
+    //Serial.println(c);
 
     switch (c) {
 
       case 'w':
+        motorController.setMotorConst(1, 1);
         setpoint = originalSetpoint + movingAngleOffset;
         break;
 
       case 's':
+        motorController.setMotorConst(1, 1);
         setpoint = originalSetpoint - movingAngleOffset;
         break;
 
       case 'a':
-        
+        motorController.setMotorConst(0.5, 1);
+        setpoint = originalSetpoint + movingAngleOffset;
         break;
 
       case 'd':
-        
+        motorController.setMotorConst(1, 0.5);
+        setpoint = originalSetpoint + movingAngleOffset;
         break;
     }
   }
-  else {
-    if (millis() - counter > 500) {
-      setpoint = originalSetpoint;
-    } 
+  else if (millis() - counter > 500) {
+    posInput=0;
+    left.write(0);
+    right.write(0);
+    posPID.Compute();
+    setpoint = originalSetpoint + posOutput;
+    motorController.setMotorConst(0.75, 1);
   }
 }
 
 
 
-
 //move back and forth
 
-/*
-  void moveBackForth()
-  {
-    moveState++;
-    if (moveState > 2) moveState = 0;
 
-    if (moveState == 0)
-      setpoint = originalSetpoint;
-    else if (moveState == 1)
-      setpoint = originalSetpoint - movingAngleOffset;
-    else
-      setpoint = originalSetpoint + movingAngleOffset;
-  }
-*/
+void moveBackForth()
+{
+  moveState++;
+  if (moveState > 2) moveState = 0;
+
+  if (moveState == 0)
+    setpoint = originalSetpoint;
+  else if (moveState == 1)
+    setpoint = originalSetpoint - 1;
+  else
+    setpoint = originalSetpoint + 1;
+}
+
 

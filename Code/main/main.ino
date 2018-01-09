@@ -11,7 +11,6 @@
 #endif
 
 #define MOVE_BACK_FORTH 0
-
 #define MIN_ABS_SPEED 80
 
 //SoftwareSerial mySerial(13, 66);
@@ -41,15 +40,15 @@ float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gra
 //PID
 
 double originalSetpoint = 174.29;
-double setpoint = originalSetpoint;
-double movingAngleOffset = 1.5;
-double input = originalSetpoint, output;
+double angSetpoint = originalSetpoint;
+double movingAngleOffset = 0.5;
+double angInput = originalSetpoint, angOutput;
 int moveState = 0; //0 = balance; 1 = back; 2 = forth
 
 double posInput, posOutput, posSetpoint = 0;
 
-PID pid(&input, &output, &setpoint, 25, 240, 2, DIRECT);
-PID posPID(&posInput, &posOutput, &posSetpoint, 0.8, 0, 1, REVERSE);
+PID angPID(&angInput, &angOutput, &angSetpoint, 25, 240, 2, DIRECT);
+PID posPID(&posInput, &posOutput, &posSetpoint, 4, 20, 2, REVERSE);
 
 //MOTOR CONTROLLER
 
@@ -132,9 +131,9 @@ void setup()
 
     //setup PID
 
-    pid.SetMode(AUTOMATIC);
-    pid.SetSampleTime(10);
-    pid.SetOutputLimits(-255, 255);
+    angPID.SetMode(AUTOMATIC);
+    angPID.SetSampleTime(10);
+    angPID.SetOutputLimits(-255, 255);
 
     posPID.SetMode(AUTOMATIC);
     posPID.SetSampleTime(10);
@@ -153,8 +152,7 @@ void setup()
 }
 
 
-void loop()
-{
+void loop() {
 
 
   // if programming failed, don't try to do anything
@@ -166,8 +164,8 @@ void loop()
   while (!mpuInterrupt && fifoCount < packetSize)
   {
 
-    //Serial.println(abs(input - originalSetpoint));
-    if (abs(input - originalSetpoint) > 20) {
+    //Stop Motors if robot falls
+    if (abs(angInput - originalSetpoint) > 20) {
       motorController.move(0);
       break;
     }
@@ -177,21 +175,18 @@ void loop()
       oldPosition = newPosition;
       posInput = newPosition / 100;
       //Serial.println(posInput);
-
     }
 
-
-
     // Serial.println(posInput);
-    //no mpu data - performing PID calculations and output to motors
+
     posPID.Compute();
 
-    calculateSetpoint();
+    calculateAngleSetpoint();
 
-    pid.Compute();
+    angPID.Compute();
 
-    if (input > setpoint + 0.3 || input < setpoint - 0.3) {
-      motorController.move(output, MIN_ABS_SPEED);
+    if (angInput > angSetpoint + 0.3 || angInput < angSetpoint - 0.3) {
+      motorController.move(angOutput, MIN_ABS_SPEED);
     }
     else {
       motorController.move(0);
@@ -200,15 +195,15 @@ void loop()
     /*
         Serial.print(posInput);
         Serial.print("\t");
-        Serial.println(setpoint);
+        Serial.println(angSetpoint);
 
            Serial.print("\t");
-           Serial.print(input);
+           Serial.print(angInput);
            Serial.print("\t");
            Serial.println(posInput);
            Serial.print(posOutput);
            Serial.print("\t");
-           Serial.print(setpoint);
+           Serial.print(angSetpoint);
            Serial.print("\t");
     */
 
@@ -255,15 +250,11 @@ void loop()
     mpu.dmpGetGravity(&gravity, &q);
     mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
 
-    input = ypr[1] * 180 / M_PI + 180;
-
-    /*
-
-    */
+    angInput = ypr[1] * 180 / M_PI + 180;
   }
 }
 
-void calculateSetpoint() {
+void calculateAngleSetpoint() {
 
   if (Serial.available()) {
     counter = millis();
@@ -275,31 +266,32 @@ void calculateSetpoint() {
 
       case 'w':
         motorController.setMotorConst(1, 1);
-        setpoint = originalSetpoint + movingAngleOffset;
+        angSetpoint = originalSetpoint - movingAngleOffset;
         break;
 
       case 's':
         motorController.setMotorConst(1, 1);
-        setpoint = originalSetpoint - movingAngleOffset;
+        angSetpoint = originalSetpoint + movingAngleOffset;
         break;
 
       case 'a':
         motorController.setMotorConst(0.5, 1);
-        setpoint = originalSetpoint + movingAngleOffset;
+        angSetpoint = originalSetpoint + movingAngleOffset;
         break;
 
       case 'd':
         motorController.setMotorConst(1, 0.5);
-        setpoint = originalSetpoint + movingAngleOffset;
+        angSetpoint = originalSetpoint + movingAngleOffset;
         break;
     }
-  }
-  else if (millis() - counter > 500) {
-    posInput=0;
+
+    posInput = 0;
     left.write(0);
     right.write(0);
     posPID.Compute();
-    setpoint = originalSetpoint + posOutput;
+  }
+  else if (millis() - counter > 500) {
+    angSetpoint = originalSetpoint + posOutput;
     motorController.setMotorConst(0.75, 1);
   }
 }
@@ -315,11 +307,10 @@ void moveBackForth()
   if (moveState > 2) moveState = 0;
 
   if (moveState == 0)
-    setpoint = originalSetpoint;
+    angSetpoint = originalSetpoint;
   else if (moveState == 1)
-    setpoint = originalSetpoint - 1;
+    angSetpoint = originalSetpoint - 1;
   else
-    setpoint = originalSetpoint + 1;
+    angSetpoint = originalSetpoint + 1;
 }
-
 
